@@ -1,0 +1,245 @@
+---
+title: "Untitled"
+author: "Cameron Bale"
+date: "8/4/2020"
+output: html_document
+---
+
+Install and load packages.
+```{r}
+#install.packages(c("tidyverse", "igraph", "tidygraph", "here", "ggraph"))
+
+library(tidyverse)
+library(igraph)
+library(tidygraph)
+library(here)
+library(ggraph)
+```
+
+Read in the data for the workshop. This is 'fake' network data based on a survey sent to workshop participants.
+```{r}
+wsd <- read_csv(here("data", "AnonSurveyData.csv"))
+```
+
+View data structure.
+```{r}
+glimpse(wsd)
+```
+
+Cut out some of the data, selecting variables of interest.
+```{r}
+wsd <- wsd %>%
+  select(ID, Q2:Q6)
+```
+
+View selected variables.
+```{r}
+glimpse(wsd)
+```
+
+### Data Exploration
+
+We can perform some initial data exploration to get a feel for what this data looks like.
+
+Compare whether people are `morning person` or `night owl`.
+```{r}
+wsd %>%
+  select(Q2) %>%
+  group_by(Q2) %>%
+  tally()
+```
+
+Compare dessert preferences.
+```{r}
+wsd %>%
+  select(Q3) %>%
+  group_by(Q3) %>%
+  tally()
+```
+
+Visualization is sometimes easier to process than a table of numbers.
+
+Plot dessert preferences.
+```{r}
+wsd %>%
+  select(Q3) %>%
+  ggplot(aes(y = Q3)) +
+  geom_bar()
+```
+
+Compare individuals' drinks. This isn't `tidy` data, since there are multiple values per entry in one variable.
+```{r}
+wsd %>%
+  select(ID, Q4) %>%
+  head()
+```
+
+There is a command `separate_rows` which can easily handle this.
+```{r}
+wsd %>%
+  select(ID, Q4) %>%
+  separate_rows(Q4, sep = ',') %>%
+  head(10)
+```
+
+We can combine the `separate_rows` command with `pivot_wider` to create indicator variables for each of the drink types.
+```{r}
+wsd %>%
+  select(ID, Q4) %>%
+  separate_rows(Q4, sep = ',') %>%
+  mutate(Checked = 1) %>%
+  pivot_wider(names_from = Q4,
+              values_from = Checked,
+              values_fill = 0)
+```
+
+We can look at cross tabulations of multiple variables, such as the number of pages in the last book individuals read by whether they are a `morning person` or a `night owl`.
+```{r}
+wsd %>%
+  select(Q2, Q5) %>%
+  group_by(Q2) %>%
+  summarize(Ave = mean(Q5),
+            SD = sd(Q5))
+```
+
+Again, this can be plotted.
+```{r}
+wsd %>%
+  select(Q2, Q5) %>%
+  ggplot(aes(x = Q2, y = Q5)) +
+  geom_boxplot()
+```
+
+### Prep for SNA
+
+Read in the edge list data. This shows all the people from the workshop that individuals who took the survey said they were connected to.
+```{r}
+EL <- read_csv(here('data', 'AnonEL.csv'))
+```
+
+Some individuals only have one connection, others have several.
+```{r}
+EL %>%
+  arrange(ID) %>%
+  head(10)
+```
+
+We need to assemble the attributes from the survey that we want to attach to nodes.
+```{r}
+attdf <- wsd %>%
+  select(ID, Q2, Q3, Q5)
+```
+
+We can plot the network.
+```{r}
+gr <- graph_from_data_frame(EL, directed = TRUE)
+
+plot(gr)
+```
+
+And, we can convert the plot to be `tidyverse` compatible.
+```{r}
+gr <- as_tbl_graph(gr)
+
+plot(gr)
+```
+
+Easiest way to add the attributes is the add them while making the graph. However, our graph contains individuals who did not take the survey, but that were reported as known by people who did take the survey. So, our attributes won't match up to the number of individuals at this point. We can fix this.
+```{r}
+#gr %>%
+#  activate(nodes) %>%
+#  mutate(AMPM = attdf$Q2)
+```
+
+First, we take our graph and change the variable `name` to `ID`, making sure that `ID` is a numeric variable. This gives us one variable with one entry for each person in the network.
+```{r}
+grnodes <- gr %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  transmute(ID = name) %>%
+  mutate(ID = as.numeric(ID))
+```
+
+We join the attributes from the attribute data to the graph ID's. This puts `NA` for the attributes of everyone who did not take the survey but was reported as a connection.
+```{r}
+nodeatts <- left_join(grnodes, attdf, by = 'ID')
+```
+
+We check that our work looks correct.
+```{r}
+head(nodeatts)
+```
+
+As expected, the people who did not take the survey have `NA` values for their attributes.
+```{r}
+tail(nodeatts)
+```
+
+Re-attempt to assemble the graph. Everything seems to have worked. The output below indicates there are four attributes applied to vertices, and they are either character or numeric attributes.
+```{r}
+gr <- gr %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+  mutate(AMPM = nodeatts$Q2,
+         Dessert = nodeatts$Q3,
+         Pages = nodeatts$Q5)
+
+summary(gr)
+```
+
+View `gr` graph object.
+```{r}
+gr
+```
+
+### Plotting Graph
+
+Most basic plot of network.
+```{r}
+gr %>%
+  ggraph() +
+  geom_edge_link() +
+  geom_node_point()
+```
+
+Can change the layout to be more appealing.
+```{r}
+gr %>%
+  ggraph(layout = 'circle') +
+  geom_edge_link() +
+  geom_node_point()
+```
+
+We can change the shape of the points to be meaningful, e.g. to represent whether someone is a `morning person` or a `night owl`. There are also `NA` values, as expected.
+```{r}
+gr %>%
+  ggraph(layout = 'circle') +
+  geom_edge_link() +
+  geom_node_point(aes(shape = AMPM))
+```
+
+The color of points can also be meaningful, e.g. the color represents individuals' dessert preferences.
+```{r}
+gr %>%
+  ggraph(layout = 'circle') +
+  geom_edge_link() +
+  geom_node_point(aes(color = Dessert))
+```
+
+The size of points can be meaningful, e.g. the number of pages in the last book an individual read.
+```{r}
+gr %>%
+  ggraph(layout = 'circle') +
+  geom_edge_link() +
+  geom_node_point(aes(size = Pages))
+```
+
+Finally, we can combine all of these attributes into one plot, although it may be a little busy.
+```{r}
+gr %>%
+  ggraph(layout = 'circle') +
+  geom_edge_link() +
+  geom_node_point(aes(shape = AMPM,
+                      color = Dessert,
+                      size = Pages))
+```
